@@ -2,14 +2,36 @@ import 'package:flutter/material.dart';
 
 import '../../core/chordpro/chordpro.dart';
 import '../../core/music/music_key.dart';
+import '../../core/music/progression.dart';
 import '../../core/music/transposer.dart';
 import '../../models/song.dart';
 
 /// 코드 악보 보기 + 조 바꾸기 + 인트로/아웃트로 표시.
 class SongChartScreen extends StatefulWidget {
-  const SongChartScreen({super.key, required this.song});
+  const SongChartScreen({
+    super.key,
+    required this.song,
+    this.initialKey,
+    this.intro,
+    this.outro,
+    this.memo,
+    this.actions = const [],
+  });
 
   final Song song;
+
+  /// 처음 보여줄 조. null이면 원래 조. (콘티에서 열 때 그 예배의 조)
+  final String? initialKey;
+
+  /// 콘티에서 따로 정한 인트로/아웃트로 ([initialKey] 기준). null이면 곡 기본값.
+  final List<String>? intro;
+  final List<String>? outro;
+
+  /// 콘티 항목 메모 (송폼 등).
+  final String? memo;
+
+  /// 앱바에 추가할 버튼 (예: 편집).
+  final List<Widget> actions;
 
   @override
   State<SongChartScreen> createState() => _SongChartScreenState();
@@ -17,9 +39,10 @@ class SongChartScreen extends StatefulWidget {
 
 class _SongChartScreenState extends State<SongChartScreen> {
   late final MusicKey _originalKey = MusicKey.parse(widget.song.originalKey);
-  late MusicKey _key = _originalKey;
-
-  Transposer get _transposer => Transposer(_originalKey, _key);
+  late final MusicKey _startKey = widget.initialKey == null
+      ? _originalKey
+      : MusicKey.parse(widget.initialKey!);
+  late MusicKey _key = _startKey;
 
   void _shift(int semitones) =>
       setState(() => _key = _key.transpose(semitones));
@@ -28,11 +51,15 @@ class _SongChartScreenState extends State<SongChartScreen> {
   Widget build(BuildContext context) {
     final song = widget.song;
     final keys = _originalKey.isMinor ? MusicKey.minorKeys : MusicKey.majorKeys;
-    final document = song.chordPro == null
-        ? null
-        : ChordProDocument.parse(
-            ChordProDocument.transpose(song.chordPro!, _transposer),
-          );
+    final fromOriginal = Transposer(_originalKey, _key);
+    // 콘티에서 정한 인트로/아웃트로는 콘티 조 기준이라 거기서부터 옮긴다.
+    final fromStart = Transposer(_startKey, _key);
+    final intro = widget.intro != null
+        ? fromStart.progression(widget.intro!)
+        : fromOriginal.progression(song.intro);
+    final outro = widget.outro != null
+        ? fromStart.progression(widget.outro!)
+        : fromOriginal.progression(song.outro);
 
     return Scaffold(
       appBar: AppBar(
@@ -57,36 +84,78 @@ class _SongChartScreenState extends State<SongChartScreen> {
             icon: const Icon(Icons.add),
             onPressed: () => _shift(1),
           ),
+          ...widget.actions,
           const SizedBox(width: 8),
         ],
       ),
-      body: ListView(
-        padding: const EdgeInsets.all(16),
-        children: [
-          Text(
-            '원래 조 ${_originalKey.name} → ${_key.name}'
-            '${song.bpm == null ? '' : ' · ${song.bpm} BPM'}',
-            style: Theme.of(context).textTheme.bodySmall,
-          ),
-          const SizedBox(height: 12),
-          if (song.intro.isNotEmpty)
-            _Progression(
-              label: 'Intro',
-              chords: _transposer.progression(song.intro),
-            ),
-          if (document != null) ..._buildChart(context, document),
-          if (song.outro.isNotEmpty)
-            _Progression(
-              label: 'Outro',
-              chords: _transposer.progression(song.outro),
-            ),
-        ],
+      body: ChordChartView(
+        song: song,
+        transposer: fromOriginal,
+        intro: intro,
+        outro: outro,
+        memo: widget.memo,
       ),
     );
   }
+}
 
-  List<Widget> _buildChart(BuildContext context, ChordProDocument document) {
+/// 곡 정보 + 인트로 + 코드 악보 + 아웃트로. 편집 화면 미리보기에도 쓴다.
+class ChordChartView extends StatelessWidget {
+  const ChordChartView({
+    super.key,
+    required this.song,
+    required this.transposer,
+    required this.intro,
+    required this.outro,
+    this.memo,
+  });
+
+  final Song song;
+  final Transposer transposer;
+  final List<String> intro;
+  final List<String> outro;
+  final String? memo;
+
+  @override
+  Widget build(BuildContext context) {
     final theme = Theme.of(context);
+    final chordPro = song.chordPro;
+    final document = chordPro == null || chordPro.trim().isEmpty
+        ? null
+        : ChordProDocument.parse(
+            ChordProDocument.transpose(chordPro, transposer),
+          );
+
+    return ListView(
+      padding: const EdgeInsets.all(16),
+      children: [
+        Text(
+          [
+            '원래 조 ${transposer.from.name} → ${transposer.to.name}',
+            if (song.bpm != null) '${song.bpm} BPM',
+            if (song.artist?.isNotEmpty ?? false) song.artist!,
+          ].join(' · '),
+          style: theme.textTheme.bodySmall,
+        ),
+        if (memo?.isNotEmpty ?? false)
+          Padding(
+            padding: const EdgeInsets.only(top: 8),
+            child: Text(memo!, style: theme.textTheme.bodyMedium),
+          ),
+        const SizedBox(height: 12),
+        if (intro.isNotEmpty) _Progression(label: 'Intro', chords: intro),
+        if (document != null) ..._buildChart(theme, document),
+        if (outro.isNotEmpty) _Progression(label: 'Outro', chords: outro),
+        if (document == null && intro.isEmpty && outro.isEmpty)
+          const Padding(
+            padding: EdgeInsets.only(top: 32),
+            child: Text('코드 악보가 없습니다.', textAlign: TextAlign.center),
+          ),
+      ],
+    );
+  }
+
+  List<Widget> _buildChart(ThemeData theme, ChordProDocument document) {
     final chordStyle = theme.textTheme.bodyMedium!.copyWith(
       color: theme.colorScheme.primary,
       fontWeight: FontWeight.bold,
@@ -163,7 +232,7 @@ class _Progression extends StatelessWidget {
           ),
           Expanded(
             child: Text(
-              '| ${chords.join(' | ')} |',
+              formatProgression(chords),
               style: theme.textTheme.bodyLarge!.copyWith(
                 color: theme.colorScheme.primary,
                 fontWeight: FontWeight.bold,

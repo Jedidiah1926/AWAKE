@@ -54,15 +54,17 @@ Python 서버 (Cloud Run)
 ## 4. 데이터 모델 (Firestore)
 
 ```
-teams/{teamId}
-  members/{uid}            { role: leader | editor | member }
+invites/{code}             { teamId, teamName, createdBy }  초대 코드
+teams/{teamId}             Team (이름, 주인, 현재 초대 코드)
+  members/{uid}            Membership { uid, teamName, displayName, role }
   songs/{songId}           Song
   setlists/{setlistId}     Setlist (곡 목록을 문서 안에 포함)
   scores/{scoreId}         악보 파일 정보 (Storage 경로, 페이지 수)
     annotations/{id}       Annotation
 ```
 
-- 코드: `lib/models/`, 접근: `lib/data/firestore_repository.dart`, 권한: `firestore.rules`
+- 코드: `lib/models/`, 접근: `lib/data/backend.dart`(인터페이스), `firestore_backend.dart`, 권한: `firestore.rules`
+- **"내 팀 목록"** 은 `members` 컬렉션 그룹 쿼리(`uid == 나`)로 만든다. `firestore.indexes.json`에 필요한 인덱스 설정이 있다.
 - **팀 단위 구조**로 만들어서, 나중에 팀 단위 구독을 붙이기 쉽게 한다.
 - **콘티 문서 하나에 곡 순서, 키, 인트로/아웃트로를 함께 저장**한다. 콘티를 열 때 읽기 1회로 끝난다.
 
@@ -73,6 +75,17 @@ teams/{teamId}
 | leader | 읽기/쓰기 + 멤버 관리 | 자기 주석 + 팀 공유 주석 삭제 |
 | editor | 읽기/쓰기 | 자기 주석 + 팀 공유 주석 삭제 |
 | member | 읽기 | 자기 주석 |
+
+### 팀 만들기와 참여 (Cloud Functions 없이)
+
+- **팀 만들기**: 팀 문서, 자신의 리더 멤버 문서, 초대 코드 문서를 **한 번의 묶음 쓰기**로 만든다.
+  보안 규칙이 `getAfter()`로 "새로 만드는 팀의 주인이 나"인지 확인한다.
+- **참여**: `invites/{code}`를 읽어 팀을 찾고, 자기 멤버 문서를 `role: member`, `inviteCode: code`로 만든다.
+  보안 규칙이 그 코드가 실제로 이 팀의 초대 코드인지 확인한다. 초대 코드 목록은 조회할 수 없다.
+- **초대 코드 새로 만들기**: 리더가 이전 코드를 지우고 새 코드를 만든다. 이전 코드로는 더 이상 참여할 수 없다.
+- 리더는 자기 역할을 바꿀 수 없고, 팀 주인은 팀을 나갈 수 없다 (리더가 없는 팀 방지).
+
+보안 규칙 테스트: `rules_test/rules.test.js` (Firestore 에뮬레이터, `cd rules_test && npm install && npm test`)
 
 개인 주석은 작성자만 읽을 수 있다. 앱은 "팀 공유" 쿼리와 "내 개인 주석" 쿼리를 각각 보내서 합친다
 (Firestore 보안 규칙은 쿼리 단위로 검사하기 때문).
@@ -145,7 +158,7 @@ teams/{teamId}
 ## 8. 개발 순서
 
 1. ✅ 프로젝트 구조, 조옮김, ChordPro, 데이터 모델, 보안 규칙 초안
-2. 로그인, 팀 만들기, 곡/콘티 목록·편집 화면 (Firebase 연결)
+2. ✅ 로그인, 팀 만들기/초대 코드 참여/역할 관리, 곡/콘티 목록·편집 화면, 보안 규칙 테스트
 3. 악보 업로드 (Storage) + 악보 뷰어 (이미지/PDF, 페이지 넘김)
 4. 주석 레이어: 손글씨 → 글자 → 가림 박스, 실시간 공유
 5. ChordPro 편집 화면 (데스크톱 단축키 포함)
@@ -153,7 +166,31 @@ teams/{teamId}
 7. OMR (실험 기능) + MusicXML 가져오기/내보내기
 8. 유료화: RevenueCat, 팀 플랜
 
-## 9. 비용 관리
+## 9. 앱 구조
+
+```
+lib/
+  main.dart            Firebase 설정이 있으면 Firebase, 없으면 데모(메모리) 백엔드로 시작
+  app/app.dart         로그인 → 팀 선택 → 팀 홈. 팀이 바뀌면 화면 스택을 새로 만든다
+  app/scope.dart       BackendScope(백엔드), TeamScope(현재 팀, 내 역할)
+  data/backend.dart    AuthService, TeamDirectory, TeamData 인터페이스
+  data/memory_backend.dart    데모 모드와 테스트용
+  data/firestore_backend.dart Firebase 구현
+  features/auth|team|song|setlist  화면
+```
+
+- 화면은 인터페이스만 쓴다. 그래서 Firebase 없이 메모리 백엔드로 전체 흐름을 위젯 테스트할 수 있다
+  (`test/app_flow_test.dart`).
+- 넓은 화면(720px 이상)은 왼쪽 내비게이션 레일, 곡 편집은 편집/미리보기 나란히.
+  좁은 화면은 아래 탭, 곡 편집은 편집/미리보기 탭.
+- 편집 버튼(곡 추가, 새 콘티, 편집)은 리더와 편집자에게만 보인다. 실제 권한은 보안 규칙이 막는다.
+
+### 데모 모드
+
+`flutterfire configure` 전에는 메모리 백엔드로 실행된다. 데모 계정(`demo@awake.app` / `demo1234`),
+"데모 찬양팀", 예제 곡 2개가 들어 있다. 앱을 끄면 데이터는 사라진다.
+
+## 10. 비용 관리
 
 - Blaze 요금제로 전환하면 바로 Google Cloud **예산 알림**을 켠다.
 - **App Check**를 적용해서 앱 밖에서 오는 호출을 막는다.
