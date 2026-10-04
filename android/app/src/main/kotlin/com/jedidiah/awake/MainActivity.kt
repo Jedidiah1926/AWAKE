@@ -1,4 +1,4 @@
-package com.awake.awake
+package com.jedidiah.awake
 
 import io.flutter.embedding.android.FlutterActivity
 
