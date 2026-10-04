@@ -23,7 +23,7 @@ Firebase를 설정하기 전에는 **데모 모드**(메모리 저장, 앱을 �
 ### Firebase 연결
 
 - Firebase 프로젝트: `awake-praise` (`.firebaserc`)
-- 앱 ID: `com.jedidiah.awake` (Android, iOS, macOS)
+- 앱 ID: `com.pilcrow1926.awake` (Android, iOS, macOS)
 
 1. Firebase 콘솔에서 Authentication(**이메일/비밀번호** 로그인)과 Firestore를 켭니다.
 2. 아래 명령으로 앱을 등록하고 설정 파일을 만듭니다 (본인 PC에서, 브라우저 로그인 필요).
