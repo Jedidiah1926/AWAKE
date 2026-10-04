@@ -1,0 +1,5 @@
+package com.awake.awake
+
+import io.flutter.embedding.android.FlutterActivity
+
+class MainActivity : FlutterActivity()

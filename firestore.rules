@@ -1,0 +1,81 @@
+rules_version = '2';
+
+// 데이터 구조는 lib/data/firestore_repository.dart 참고.
+//
+// teams/{teamId}/members/{uid}  { role: 'leader' | 'editor' | 'member' }
+//   - leader: 팀 관리, 멤버 관리
+//   - editor: 곡/콘티 편집 (인도자, 반주자 등)
+//   - member: 보기 + 자기 주석
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    function member(teamId) {
+      return signedIn() &&
+        exists(/databases/$(database)/documents/teams/$(teamId)/members/$(request.auth.uid));
+    }
+
+    function role(teamId) {
+      return get(/databases/$(database)/documents/teams/$(teamId)/members/$(request.auth.uid)).data.role;
+    }
+
+    function leader(teamId) {
+      return member(teamId) && role(teamId) == 'leader';
+    }
+
+    function editor(teamId) {
+      return member(teamId) && role(teamId) in ['leader', 'editor'];
+    }
+
+    match /teams/{teamId} {
+      allow read: if member(teamId);
+      // 팀 생성은 나중에 Cloud Functions로 (생성자를 leader 멤버로 같이 등록).
+      allow update, delete: if leader(teamId);
+
+      match /members/{uid} {
+        allow read: if member(teamId);
+        allow write: if leader(teamId);
+      }
+
+      match /songs/{songId} {
+        allow read: if member(teamId);
+        allow write: if editor(teamId);
+      }
+
+      match /setlists/{setlistId} {
+        allow read: if member(teamId);
+        allow write: if editor(teamId);
+      }
+
+      match /scores/{scoreId} {
+        allow read: if member(teamId);
+        allow write: if editor(teamId);
+
+        match /annotations/{annotationId} {
+          // 팀 공유 주석은 팀원 모두, 개인 주석은 작성자만 볼 수 있다.
+          allow read: if member(teamId) &&
+            (resource.data.visibility == 'team' ||
+             resource.data.authorId == request.auth.uid);
+
+          allow create: if member(teamId) &&
+            request.resource.data.authorId == request.auth.uid &&
+            request.resource.data.visibility in ['team', 'private'] &&
+            request.resource.data.type in ['ink', 'text', 'mask'];
+
+          // 작성자는 자기 주석을 고칠 수 있다 (작성자는 바꿀 수 없음).
+          allow update: if member(teamId) &&
+            resource.data.authorId == request.auth.uid &&
+            request.resource.data.authorId == request.auth.uid;
+
+          // 작성자, 또는 팀 공유 주석은 편집자도 지울 수 있다.
+          allow delete: if member(teamId) &&
+            (resource.data.authorId == request.auth.uid ||
+             (resource.data.visibility == 'team' && editor(teamId)));
+        }
+      }
+    }
+  }
+}
